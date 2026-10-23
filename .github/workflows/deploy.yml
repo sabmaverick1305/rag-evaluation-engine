@@ -2,45 +2,133 @@ name: Deploy Production Graph RAG to AWS
 
 on:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
+
+  workflow_dispatch:
 
 permissions:
-  id-token: write   # Required for AWS OIDC token exchange
+  id-token: write
   contents: read
 
 env:
-  AWS_REGION: us-east-1                  # Replace with your target AWS region
-  ECR_REPOSITORY: graph-rag-api          # Your AWS ECR repository name
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: "159142082968"
+  ECR_REPOSITORY: graph-rag-api
   AWS_ROLE_ARN: arn:aws:iam::159142082968:role/GitHubActionsGraphRAGDeployRole
 
 jobs:
   deploy:
+    name: Build and Deploy GraphRAG
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v6
 
+    steps:
+      # ------------------------------------
+      # 1. Checkout repository
+      # ------------------------------------
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # ------------------------------------
+      # 2. Inspect GitHub OIDC claims
+      # ------------------------------------
+      - name: Debug GitHub OIDC Claims
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const token = await core.getIDToken(
+              'sts.amazonaws.com'
+            );
+
+            const payload = JSON.parse(
+              Buffer.from(
+                token.split('.')[1],
+                'base64url'
+              ).toString('utf8')
+            );
+
+            core.info('=== GitHub OIDC Claims ===');
+            core.info(`Issuer: ${payload.iss}`);
+            core.info(`Audience: ${payload.aud}`);
+            core.info(`Subject: ${payload.sub}`);
+            core.info(`Repository: ${payload.repository}`);
+            core.info(`Ref: ${payload.ref}`);
+            core.info(`Environment: ${payload.environment || 'none'}`);
+            core.info('==========================');
+
+      # ------------------------------------
+      # 3. Authenticate with AWS via OIDC
+      # ------------------------------------
       - name: Authenticate with AWS via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           audience: sts.amazonaws.com
+          role-session-name: GitHubActionsGraphRAG
 
+      # ------------------------------------
+      # 4. Verify AWS identity
+      # ------------------------------------
+      - name: Verify AWS Identity
+        run: |
+          echo "Verifying assumed AWS role..."
+          aws sts get-caller-identity
+
+      # ------------------------------------
+      # 5. Login to Amazon ECR
+      # ------------------------------------
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build, Tag, and Push Docker Image to Amazon ECR
+      # ------------------------------------
+      # 6. Build Docker image
+      # ------------------------------------
+      - name: Build and Tag Docker Image
         env:
           REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          TAG: ${{ github.sha }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          docker build -t $REGISTRY/$ECR_REPOSITORY:$TAG -t $REGISTRY/$ECR_REPOSITORY:latest .
-          docker push $REGISTRY/$ECR_REPOSITORY:$TAG
-          docker push $REGISTRY/$ECR_REPOSITORY:latest
+          set -euo pipefail
 
-      - name: Update ECS Service (Optional / Target Compute)
+          IMAGE_URI="$REGISTRY/$ECR_REPOSITORY"
+
+          echo "Building GraphRAG Docker image..."
+
+          docker build \
+            -t "$IMAGE_URI:$IMAGE_TAG" \
+            -t "$IMAGE_URI:latest" \
+            .
+
+      # ------------------------------------
+      # 7. Push Docker image to ECR
+      # ------------------------------------
+      - name: Push Docker Image to ECR
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
-          echo "Image pushed successfully. Triggering ECS deployment rollout..."
-          # aws ecs update-service --cluster graph-rag-cluster --service graph-rag-service --force-new-deployment
+          set -euo pipefail
+
+          IMAGE_URI="$REGISTRY/$ECR_REPOSITORY"
+
+          docker push "$IMAGE_URI:$IMAGE_TAG"
+          docker push "$IMAGE_URI:latest"
+
+          echo "Successfully pushed:"
+          echo "$IMAGE_URI:$IMAGE_TAG"
+
+      # ------------------------------------
+      # 8. ECS deployment (optional)
+      # ------------------------------------
+      # Enable after configuring your
+      # ECS cluster, service and task definition.
+      #
+      # - name: Deploy to ECS
+      #   run: |
+      #     aws ecs update-service \
+      #       --cluster graph-rag-cluster \
+      #       --service graph-rag-service \
+      #       --force-new-deployment \
+      #       --region "$AWS_REGION"

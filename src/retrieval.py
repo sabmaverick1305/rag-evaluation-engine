@@ -1,6 +1,7 @@
 import os
+from contextlib import closing
 from typing import List, Dict, Any
-import psycopg
+import psycopg2
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from src.state import RAGState
 from src.neo4j_client import Neo4jGraphClient
@@ -29,7 +30,7 @@ class ProductionGraphRAGRetriever:
         """Loads all document chunks from Postgres into memory for validation."""
         chunks_map = {}
         try:
-            with psycopg.connect(self.db_url) as conn:
+            with closing(psycopg2.connect(self.db_url, connect_timeout=10)) as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("SELECT chunk_id, content, source_doc FROM document_chunks;")
                     rows = cursor.fetchall()
@@ -48,7 +49,7 @@ class ProductionGraphRAGRetriever:
         query_vector = self.embedder.encode(query).tolist()
         candidates = {}
 
-        with psycopg.connect(self.db_url) as conn:
+        with closing(psycopg2.connect(self.db_url, connect_timeout=10)) as conn:
             with conn.cursor() as cursor:
                 # 1. Dense Vector Search (pgvector cosine similarity)
                 cursor.execute(

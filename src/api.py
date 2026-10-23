@@ -15,6 +15,8 @@ from src.state import RAGState
 from src.retrieval import ProductionGraphRAGRetriever
 from src.generator import ProductionGenerator
 from src.guardrails import InputGuardrail, OutputGuardrail
+from src.orchestrator import ProductionGraphRAGOrchestrator
+from src.schemas import GroundedRAGResponse
 
 app = FastAPI(
     title="Production Graph RAG API",
@@ -24,8 +26,9 @@ app = FastAPI(
 
 # Initialize database retriever and local generator on startup
 DB_URL = os.getenv("DATABASE_URL", "postgresql://graphrag:localdevonly@127.0.0.1:5432/graphrag")
-retriever = ProductionGraphRAGRetriever(db_url=DB_URL)
-generator = ProductionGenerator(model_id="Qwen/Qwen2.5-1.5B-Instruct")
+orchestrator = ProductionGraphRAGOrchestrator(db_url=DB_URL)
+retriever = orchestrator.retriever
+generator = orchestrator.generator
 
 class QueryRequest(BaseModel):
     query: str
@@ -46,7 +49,7 @@ def traced_retrieve(query: str, top_k: int) -> List[Dict[str, Any]]:
 @traceable(name="Grounded-LLM-Generator", run_type="llm")
 def traced_generate(query: str, candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Traces the prompt construction and local LLM generation step with confidence fallback."""
-    return generator.generate_answer(query, candidates)
+    return generator.generate_grounded_answer(query, candidates).model_dump()
 
 @traceable(name="GraphRAG-Pipeline", run_type="chain")
 def run_rag_pipeline(query: str, top_k: int) -> Dict[str, Any]:
@@ -71,16 +74,9 @@ def run_rag_pipeline(query: str, top_k: int) -> Dict[str, Any]:
 @app.post("/query", response_model=GroundedRAGResponse)
 async def query_endpoint(request: QueryRequest):
     try:
-        safe_query = InputGuardrail.sanitize_and_redact(request.query)
-        candidates = traced_retrieve(safe_query, request.top_k)
-        
-        # Generate structured, grounded response with citations
-        structured_response = generator.generate_grounded_answer(safe_query, candidates)
-        
-        # Apply output guardrail verification
-        structured_response.answer = OutputGuardrail.verify_and_filter(structured_response.answer, candidates)
-        
-        return structured_response
+        # Execute end-to-end orchestrated pipeline
+        result = orchestrator.run(request.query, request.top_k)
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
