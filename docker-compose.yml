@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: graphrag_postgres
+    environment:
+      POSTGRES_USER: graphrag
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-localdevonly}
+      POSTGRES_DB: graphrag
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U graphrag -d graphrag"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    profiles: [api]
+    build: .
+    container_name: graphrag_api
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - DATABASE_URL=postgresql://graphrag:${POSTGRES_PASSWORD:-localdevonly}@postgres:5432/graphrag
+    volumes:
+      - huggingface_cache:/home/app/.cache/huggingface
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  huggingface_cache:

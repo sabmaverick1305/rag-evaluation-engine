@@ -1,0 +1,128 @@
+[
+  {
+    "query_id": "eval_002",
+    "query": "Who first introduced the retrieve-then-generate pattern in 2017?",
+    "target_chunk_ids": [
+      "ai_engineering_ch1_chunk_1186"
+    ]
+  },
+  {
+    "query_id": "eval_005",
+    "query": "What are the two main functions of a retriever?",
+    "target_chunk_ids": [
+      "ai_engineering_ch1_chunk_1195"
+    ]
+  },
+  {
+    "query_id": "eval_006",
+    "query": "How is term frequency (TF) defined in term-based retrieval?",
+    "target_chunk_ids": [
+      "ai_engineering_ch1_chunk_1206"
+    ]
+  },
+  {
+    "query_id": "eval_007",
+    "query": "How is inverse document frequency (IDF) calculated?",
+    "target_chunk_ids": [
+      "ai_engineering_ch1_chunk_1209"
+    ]
+  },
+  {
+    "query_id": "eval_008",
+    "query": "What are two common term-based retrieval solutions mentioned?",
+    "target_chunk_ids": [
+      "ai_engineering_ch1_chunk_1209"
+    ]
+  },
+  {
+    "query_id": "eval_009",
+    "query": "What is embedding-based retrieval also known as?",
+    "target_chunk_ids": [
+      "ai_engineering_ch1_chunk_1217"
+    ]
+  },
+  {
+    "query_id": "eval_010",
+    "query": "What are the two steps involved in querying a vector database for semantic retrieval?",
+    "target_chunk_ids": [
+      "ai_engineering_ch1_chunk_1217"
+    ]
+  },
+  {
+    "query_id": "eval_011",
+    "query": "What approximate nearest neighbor algorithm uses K-means clustering to organize vectors into clusters?",
+    "target_chunk_ids": [
+      "ai_engineering_ch1_chunk_1227"
+    ]
+  },
+  {
+    "query_id": "eval_012",
+    "query": "Which tree-based approximate nearest neighbor approach builds binary trees using random splitting and was open-sourced by Spotify?",
+    "target_chunk_ids": [
+      "ai_engineering_ch1_chunk_1228"
+    ]
+  },
+  {
+    "query_id": "eval_013",
+    "query": "How do term-based retrieval and embedding-based retrieval compare in querying speed and performance?",
+    "target_chunk_ids": [
+      "ai_engineering_ch1_chunk_1230"
+    ]
+  },
+  {
+    "query_id": "eval_014",
+    "query": "Why is reranking especially useful in a retrieval pipeline?",
+    "target_chunk_ids": [
+      "ai_engineering_ch1_chunk_1260"
+    ]
+  },
+  {
+    "query_id": "eval_015",
+    "query": "What is query rewriting also known as?",
+    "target_chunk_ids": [
+      "ai_engineering_ch1_chunk_1263"
+    ]
+  },
+  {
+    "query_id": "eval_016",
+    "query": "What is the core idea behind contextual retrieval?",
+    "target_chunk_ids": [
+      "ai_engineering_ch1_chunk_1267"
+    ]
+  },
+  {
+    "query_id": "eval_017",
+    "query": "How does Multimodal RAG work using CLIP embeddings?",
+    "target_chunk_ids": [
+      "ai_engineering_ch1_chunk_1277"
+    ]
+  },
+  {
+    "query_id": "eval_018",
+    "query": "What are the three steps in a RAG system that augments context with tabular data?",
+    "target_chunk_ids": [
+      "ai_engineering_ch1_chunk_1280"
+    ]
+  },
+  {
+    "query_id": "eval_019",
+    "query": "What does TTFT stand for, and what does it measure in inference performance?",
+    "target_chunk_ids": [
+      "ai_engineering_ch1_chunk_199"
+    ]
+  },
+  {
+    "query_id": "eval_020",
+    "query": "What does TPOT stand for, and what does it measure?",
+    "target_chunk_ids": [
+      "ai_engineering_ch1_chunk_1901"
+    ]
+  },
+  {
+    "query_id": "eval_024",
+    "query": "How does disaggregating prefill and decode improve inference server efficiency?",
+    "target_chunk_ids": [
+      "ai_engineering_ch1_chunk_2018"
+    ]
+  }
+]

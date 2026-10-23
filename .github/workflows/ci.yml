@@ -1,0 +1,48 @@
+name: Production Graph RAG CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: graphrag
+          POSTGRES_PASSWORD: localdevonly
+          POSTGRES_DB: graphrag
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+
+    - name: Install dependencies
+      run: |
+        uv pip install --system -r pyproject.toml || uv pip install --system .
+
+    - name: Run Retrieval Evaluation Tests
+      env:
+        DATABASE_URL: postgresql://graphrag:localdevonly@localhost:5432/graphrag
+        RETRIEVAL_TOP_K: 1
+      run: |
+        uv run pytest evaluation/evaluate_retrieval.py -v -s
