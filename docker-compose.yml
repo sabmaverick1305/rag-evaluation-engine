@@ -17,6 +17,21 @@ services:
       timeout: 5s
       retries: 5
 
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/localdevpassword}
+    ports:
+      - "127.0.0.1:7474:7474"
+      - "127.0.0.1:7687:7687"
+    volumes:
+      - neo4j_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p $${NEO4J_AUTH#*/} 'RETURN 1' >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+
   api:
     profiles: [api]
     build: .
@@ -38,3 +53,4 @@ services:
 volumes:
   postgres_data:
   huggingface_cache:
+  neo4j_data:

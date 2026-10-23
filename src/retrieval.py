@@ -1,120 +1,137 @@
 import os
 from typing import List, Dict, Any
-import psycopg2
-from rank_bm25 import BM25Okapi
+import psycopg
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from src.state import RAGState
+from src.neo4j_client import Neo4jGraphClient
 
 class ProductionGraphRAGRetriever:
-    def __init__(self, db_url: str, embedding_model: str = "all-MiniLM-L6-v2", reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"):
+    def __init__(
+        self, 
+        db_url: str, 
+        embedding_model_id: str = "sentence-transformers/all-MiniLM-L6-v2",
+        cross_encoder_id: str = "BAAI/bge-reranker-large"
+    ):
         self.db_url = db_url
-        self.encoder = SentenceTransformer(embedding_model)
-        # Initialize the cross-encoder for deep semantic re-scoring
-        self.reranker = CrossEncoder(reranker_model)
+        print(f"Initializing embedding model ({embedding_model_id})...")
+        self.embedder = SentenceTransformer(embedding_model_id)
         
+        print(f"Initializing cross-encoder reranker ({cross_encoder_id})...")
+        self.reranker = CrossEncoder(cross_encoder_id)
+        
+        # Initialize Neo4j graph client for ontology-aware traversal
+        self.neo4j_client = Neo4jGraphClient()
+        
+        # Load local reference chunks for evaluation alignment
         self.chunks = self._load_all_chunks()
-        tokenized_corpus = [chunk["text"].lower().split() for chunk in self.chunks]
-        self.bm25 = BM25Okapi(tokenized_corpus)
 
-    def _load_all_chunks(self) -> List[Dict[str, Any]]:
-        conn = psycopg2.connect(self.db_url)
-        cursor = conn.cursor()
-        cursor.execute("SELECT chunk_id, source_doc, content FROM document_chunks;")
-        rows = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        return [{"id": row[0], "source_doc": row[1], "text": row[2]} for row in rows]
+    def _load_all_chunks(self) -> Dict[str, Dict[str, Any]]:
+        """Loads all document chunks from Postgres into memory for validation."""
+        chunks_map = {}
+        try:
+            with psycopg.connect(self.db_url) as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT chunk_id, content, source_doc FROM document_chunks;")
+                    rows = cursor.fetchall()
+                    for row in rows:
+                        chunks_map[row[0]] = {
+                            "id": row[0],
+                            "text": row[1],
+                            "source_doc": row[2]
+                        }
+        except Exception as e:
+            print(f"Warning: Could not load chunks cache from DB: {e}")
+        return chunks_map
 
-    def retrieve(self, state: RAGState, fetch_k: int = 30, top_k: int = 3) -> RAGState:
+    def _run_hybrid_search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        """Executes combined dense vector search and sparse text search in PostgreSQL."""
+        query_vector = self.embedder.encode(query).tolist()
+        candidates = {}
+
+        with psycopg.connect(self.db_url) as conn:
+            with conn.cursor() as cursor:
+                # 1. Dense Vector Search (pgvector cosine similarity)
+                cursor.execute(
+                    """
+                    SELECT chunk_id, content, source_doc, 
+                           1 - (embedding <=> %s::vector) AS score
+                    FROM document_chunks
+                    ORDER BY embedding <=> %s::vector
+                    LIMIT %s;
+                    """,
+                    (query_vector, query_vector, top_k)
+                )
+                for row in cursor.fetchall():
+                    candidates[row[0]] = {
+                        "id": row[0],
+                        "text": row[1],
+                        "source_doc": row[2],
+                        "score": float(row[3]),
+                        "source": "vector_search"
+                    }
+
+                # 2. Sparse Text Search (Postgres Full-Text / ILIKE keyword fallback)
+                keywords = [f"%{term}%" for term in query.split() if len(term) > 3]
+                if keywords:
+                    cursor.execute(
+                        """
+                        SELECT chunk_id, content, source_doc
+                        FROM document_chunks
+                        WHERE content ILIKE ANY (%s)
+                        LIMIT %s;
+                        """,
+                        (keywords, top_k)
+                    )
+                    for row in cursor.fetchall():
+                        if row[0] not in candidates:
+                            candidates[row[0]] = {
+                                "id": row[0],
+                                "text": row[1],
+                                "source_doc": row[2],
+                                "score": 0.5,  # Default baseline score for sparse keyword matches
+                                "source": "sparse_search"
+                            }
+
+        return list(candidates.values())
+
+    def _rerank_candidates(self, query: str, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Re-scores and sorts candidate chunks using the Cross-Encoder model."""
+        if not candidates:
+            return []
+
+        pairs = [[query, candidate["text"]] for candidate in candidates]
+        scores = self.reranker.predict(pairs)
+
+        for i, candidate in enumerate(candidates):
+            candidate["score"] = float(scores[i])
+
+        # Sort descending by cross-encoder score
+        reranked = sorted(candidates, key=lambda x: x["score"], reverse=True)
+        return reranked
+
+    def retrieve(self, state: RAGState, top_k: int = 1) -> RAGState:
+        """
+        Executes multi-stage retrieval:
+        1. Hybrid Search (pgvector + sparse keywords)
+        2. Neo4j Ontology-Driven Multi-Hop Graph Traversal
+        3. Deduplication and Candidate Pool Merging
+        4. Cross-Encoder Reranking
+        5. Returns top_k candidates in state.retrieved_candidates
+        """
         query = state.query
-        query_vector = self.encoder.encode(query).tolist()
 
-        conn = psycopg2.connect(self.db_url)
-        cursor = conn.cursor()
+        # Step 1: Hybrid Search from Postgres
+        hybrid_candidates = self._run_hybrid_search(query, top_k=5)
 
-        # 1. Broad Dense Semantic Search via pgvector
-        cursor.execute(
-            """
-            SELECT chunk_id, source_doc, content, (embedding <=> %s::vector) as distance
-            FROM document_chunks
-            ORDER BY distance ASC
-            LIMIT %s;
-            """,
-            (query_vector, fetch_k)
-        )
-        dense_rows = cursor.fetchall()
-        formatted_dense = [
-            {"id": row[0], "source_doc": row[1], "text": row[2], "score": 1.0 - float(row[3])}
-            for row in dense_rows
-        ]
+        # Step 2: Neo4j Ontology-Driven Graph Traversal
+        kg_candidates = self.neo4j_client.ontology_multihop_traverse(query, limit=3)
 
-        # 2. Broad Sparse Lexical Search (BM25)
-        tokenized_query = query.lower().split()
-        bm25_scores = self.bm25.get_scores(tokenized_query)
-        top_sparse_indices = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:fetch_k]
-        sparse_results = [
-            {"id": self.chunks[i]["id"], "source_doc": self.chunks[i]["source_doc"], "text": self.chunks[i]["text"], "score": float(bm25_scores[i])}
-            for i in top_sparse_indices
-        ]
+        # Step 3: Deduplicate and merge candidate pools
+        combined_pool = {c["id"]: c for c in hybrid_candidates + kg_candidates}.values()
 
-        # 3. Enhanced Knowledge Graph Relational Traversal (Fuzzy / Multi-word entity matching)
-        query_terms = [f"%{term}%" for term in query.lower().split() if len(term) > 3]
-        if query_terms:
-            cursor.execute(
-                """
-                SELECT DISTINCT e.chunk_id, dc.content, dc.source_doc
-                FROM kg_edges e
-                JOIN document_chunks dc ON e.chunk_id = dc.chunk_id
-                WHERE (
-                    SELECT bool_or(e.source_entity ILIKE t OR e.target_entity ILIKE t)
-                    FROM unnest(%s) t
-                );
-                """,
-                (query_terms,)
-            )
-            kg_rows = cursor.fetchall()
-            state.kg_augmented_context = [
-                {"id": row[0], "text": row[1], "source_doc": row[2], "relation_source": "knowledge_graph"}
-                for row in kg_rows
-            ]
-        else:
-            state.kg_augmented_context = []
+        # Step 4: Cross-Encoder Reranking
+        scored_candidates = self._rerank_candidates(query, list(combined_pool))
 
-        cursor.close()
-        conn.close()
-
-        # 4. Reciprocal Rank Fusion (RRF) to merge candidate pools
-        fused_candidates = self._reciprocal_rank_fusion(formatted_dense, sparse_results, fetch_k=fetch_k)
-
-        # 5. Cross-Encoder Reranking
-        if fused_candidates:
-            pairs = [[query, candidate["text"]] for candidate in fused_candidates]
-            rerank_scores = self.reranker.predict(pairs)
-            
-            for idx, candidate in enumerate(fused_candidates):
-                candidate["score"] = float(rerank_scores[idx])
-            
-            # Sort by cross-encoder score descending and truncate to final top_k
-            fused_candidates = sorted(fused_candidates, key=lambda x: x["score"], reverse=True)
-
-        state.retrieved_candidates = fused_candidates[:top_k]
+        # Step 5: Assign top_k results to state
+        state.retrieved_candidates = scored_candidates[:top_k]
         return state
-
-    def _reciprocal_rank_fusion(self, dense: List[Dict], sparse: List[Dict], k: int = 60, fetch_k: int = 30) -> List[Dict]:
-        rrf_scores = {}
-        
-        for rank, item in enumerate(dense):
-            cid = item["id"]
-            rrf_scores[cid] = rrf_scores.get(cid, {"id": cid, "text": item["text"], "source_doc": item["source_doc"], "score": 0.0})
-            rrf_scores[cid]["score"] += 1.0 / (k + rank + 1)
-
-        for rank, item in enumerate(sparse):
-            cid = item["id"]
-            if cid not in rrf_scores:
-                chunk_text = next((c["text"] for c in self.chunks if c["id"] == cid), "")
-                source_doc = next((c["source_doc"] for c in self.chunks if c["id"] == cid), "")
-                rrf_scores[cid] = {"id": cid, "text": chunk_text, "source_doc": source_doc, "score": 0.0}
-            rrf_scores[cid]["score"] += 1.0 / (k + rank + 1)
-
-        sorted_candidates = sorted(rrf_scores.values(), key=lambda x: x["score"], reverse=True)
-        return sorted_candidates[:fetch_k]

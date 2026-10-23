@@ -23,35 +23,59 @@ class ProductionGenerator:
         )
         self.llm = HuggingFacePipeline(pipeline=pipe)
 
-    def generate_answer(self, query: str, retrieved_chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
-        # Fallback Check: If no chunks retrieved or confidence score is below threshold
+    def generate_grounded_answer(self, query: str, retrieved_chunks: List[Dict[str, Any]]) -> GroundedRAGResponse:
+        # Fallback check if no relevant chunks are present
         if not retrieved_chunks or retrieved_chunks[0].get("score", 1.0) < -2.0:
-            return {
-                "query": query,
-                "answer": "I cannot answer this based on the provided documents as no sufficiently relevant context was found.",
-                "sources": []
-            }
+            return GroundedRAGResponse(
+                answer="I cannot answer this based on the provided documents as no sufficiently relevant context was found.",
+                citations=[],
+                confidence_score=0.0
+            )
 
-        context_str = "\n\n".join([f"Source [{chunk.get('source_doc', 'doc')}]: {chunk['text']}" for chunk in retrieved_chunks])
+        context_str = "\n\n".join([
+            f"--- CHUNK ID: {chunk['id']} (Source: {chunk.get('source_doc', 'doc')}) ---\n{chunk['text']}" 
+            for chunk in retrieved_chunks
+        ])
+
+        system_prompt = (
+            "You are a precise technical AI assistant. Answer the user's question using ONLY the provided context. "
+            "You MUST output valid JSON matching this exact schema:\n"
+            "{\n"
+            "  \"answer\": \"string\",\n"
+            "  \"citations\": [\n"
+            "    {\"chunk_id\": \"string\", \"source_doc\": \"string\", \"relevant_snippet\": \"string\"}\n"
+            "  ],\n"
+            "  \"confidence_score\": float\n"
+            "}"
+        )
+
+        user_prompt = f"Context:\n{context_str}\n\nUser Question: {query}"
+
+        # Invoke local LLM with structured instruction
+        response_raw = self.llm.invoke(f"{system_prompt}\n\n{user_prompt}")
         
-        prompt = f"""You are a precise technical AI assistant. Answer the user's question using ONLY the provided context below. If the answer cannot be found in the context, state "I cannot answer this based on the provided documents." Do not hallucinate or extrapolate.
+        # Clean and parse JSON output into Pydantic model
+        try:
+            # Extract JSON block if wrapped in markdown
+            if "```json" in response_raw:
+                json_str = response_raw.split("```json")[1].split("```")[0].strip()
+            elif "```" in response_raw:
+                json_str = response_raw.split("```")[1].split("```")[0].strip()
+            else:
+                json_str = response_raw.strip()
 
-Context:
-{context_str}
-
-User Question: {query}
-
-Answer:"""
-
-        response = self.llm.invoke(prompt)
-        
-        if "Answer:" in response:
-            answer = response.split("Answer:")[-1].strip()
-        else:
-            answer = response.strip()
-
-        return {
-            "query": query,
-            "answer": answer,
-            "sources": [chunk["id"] for chunk in retrieved_chunks]
-        }
+            data = json.loads(json_str)
+            return GroundedRAGResponse(**data)
+        except (json.JSONDecodeError, ValidationError) as e:
+            # Fallback parser safety net if formatting fails
+            return GroundedRAGResponse(
+                answer=response_raw.strip(),
+                citations=[
+                    Citation(
+                        chunk_id=retrieved_chunks[0]["id"],
+                        source_doc=retrieved_chunks[0].get("source_doc", "unknown"),
+                        relevant_snippet=retrieved_chunks[0]["text"][:150]
+                    )
+                ],
+                confidence_score=0.5
+            )

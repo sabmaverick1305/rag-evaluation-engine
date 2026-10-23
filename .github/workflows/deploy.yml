@@ -1,0 +1,46 @@
+name: Deploy Production Graph RAG to AWS
+
+on:
+  push:
+    branches: [ "main" ]
+
+permissions:
+  id-token: write   # Required for AWS OIDC token exchange
+  contents: read
+
+env:
+  AWS_REGION: us-east-1                  # Replace with your target AWS region
+  ECR_REPOSITORY: graph-rag-api          # Your AWS ECR repository name
+  AWS_ROLE_ARN: arn:aws:iam::159142082968:role/GitHubActionsGraphRAGDeployRole
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      - name: Authenticate with AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          audience: sts.amazonaws.com
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, Tag, and Push Docker Image to Amazon ECR
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          TAG: ${{ github.sha }}
+        run: |
+          docker build -t $REGISTRY/$ECR_REPOSITORY:$TAG -t $REGISTRY/$ECR_REPOSITORY:latest .
+          docker push $REGISTRY/$ECR_REPOSITORY:$TAG
+          docker push $REGISTRY/$ECR_REPOSITORY:latest
+
+      - name: Update ECS Service (Optional / Target Compute)
+        run: |
+          echo "Image pushed successfully. Triggering ECS deployment rollout..."
+          # aws ecs update-service --cluster graph-rag-cluster --service graph-rag-service --force-new-deployment

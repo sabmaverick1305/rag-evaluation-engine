@@ -68,11 +68,19 @@ def run_rag_pipeline(query: str, top_k: int) -> Dict[str, Any]:
         "retrieved_candidates": candidates
     }
 
-@app.post("/query", response_model=QueryResponse)
+@app.post("/query", response_model=GroundedRAGResponse)
 async def query_endpoint(request: QueryRequest):
     try:
-        result = run_rag_pipeline(request.query, request.top_k)
-        return result
+        safe_query = InputGuardrail.sanitize_and_redact(request.query)
+        candidates = traced_retrieve(safe_query, request.top_k)
+        
+        # Generate structured, grounded response with citations
+        structured_response = generator.generate_grounded_answer(safe_query, candidates)
+        
+        # Apply output guardrail verification
+        structured_response.answer = OutputGuardrail.verify_and_filter(structured_response.answer, candidates)
+        
+        return structured_response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
