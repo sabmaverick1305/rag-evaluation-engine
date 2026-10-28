@@ -55,4 +55,8 @@ jobs:
 
     - name: Run Hermetic Unit Test Suite
       run: |
-        python -m pytest tests/test_agent_workflow.py tests/test_bedrock_integration.py tests/test_agentcore_integration.py -v
+        uv run pytest tests/test_agent_workflow.py tests/test_bedrock_integration.py tests/test_agentcore_integration.py -v
+
+    - name: Run Hermetic Unit Test Suite
+      run: |
+        uv run pytest tests/test_agent_workflow.py tests/test_bedrock_integration.py tests/test_agentcore_integration.py -v
