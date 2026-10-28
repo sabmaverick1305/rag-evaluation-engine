@@ -1,0 +1,193 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS Bedrock Agent Core Infrastructure for Production GraphRAG Agent
+
+Parameters:
+  FoundationModelId:
+    Type: String
+    Default: 'anthropic.claude-3-5-sonnet-20241022-v2:0'
+    Description: Bedrock foundation model ID (e.g. Anthropic Claude 3.5 Sonnet or Claude 3 Haiku)
+  AgentName:
+    Type: String
+    Default: 'production-graphrag-agent'
+    Description: Name of the Bedrock Agent
+  DatabaseUrl:
+    Type: String
+    NoEcho: true
+    Default: 'postgresql://graphrag:localdevonly@127.0.0.1:5432/graphrag'
+    Description: PostgreSQL connection string with pgvector
+  Neo4jUri:
+    Type: String
+    Default: 'bolt://localhost:7687'
+    Description: Neo4j bolt URI
+
+Resources:
+  # -------------------------------------------------------------
+  # IAM Execution Role for Bedrock Agent
+  # -------------------------------------------------------------
+  BedrockAgentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-BedrockAgentRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: BedrockModelInvocationPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:GetFoundationModel
+                Resource: '*'
+
+  # -------------------------------------------------------------
+  # IAM Execution Role for Action Group Lambda
+  # -------------------------------------------------------------
+  LambdaActionGroupRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AWS::StackName}-ActionGroupLambdaRole'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+
+  # -------------------------------------------------------------
+  # Action Group Lambda Function
+  # -------------------------------------------------------------
+  GraphRAGActionGroupLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-action-group'
+      Handler: src.aws.lambda_action_group.lambda_handler
+      Runtime: python3.11
+      Timeout: 60
+      MemorySize: 512
+      Role: !GetAtt LambdaActionGroupRole.Arn
+      Environment:
+        Variables:
+          DATABASE_URL: !Ref DatabaseUrl
+          NEO4J_URI: !Ref Neo4jUri
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+              from src.aws.lambda_action_group import lambda_handler as handler
+              return handler(event, context)
+
+  # -------------------------------------------------------------
+  # Bedrock Agent Resource
+  # -------------------------------------------------------------
+  GraphRAGBedrockAgent:
+    Type: AWS::Bedrock::Agent
+    Properties:
+      AgentName: !Ref AgentName
+      AgentResourceRoleArn: !GetAtt BedrockAgentRole.Arn
+      FoundationModel: !Ref FoundationModelId
+      Instruction: >-
+        You are an expert GraphRAG Deep Research Agent. Answer queries by retrieving context
+        using the GraphRAGActionGroup tools. Always ground your technical answers in the retrieved
+        chunks and provide citations. Output responses formatted as JSON matching GroundedRAGResponse:
+        {"answer": "...", "citations": [{"chunk_id": "...", "source_doc": "...", "relevant_snippet": "..."}], "confidence_score": 0.9}.
+      AutoPrepare: true
+
+  # -------------------------------------------------------------
+  # Lambda Invoke Permission for Bedrock Agent
+  # -------------------------------------------------------------
+  BedrockInvocationPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt GraphRAGActionGroupLambda.Arn
+      Principal: bedrock.amazonaws.com
+      SourceArn: !GetAtt GraphRAGBedrockAgent.AgentArn
+
+  # -------------------------------------------------------------
+  # Bedrock Agent Action Group
+  # -------------------------------------------------------------
+  GraphRAGActionGroup:
+    Type: AWS::Bedrock::AgentActionGroup
+    DependsOn: BedrockInvocationPermission
+    Properties:
+      AgentId: !GetAtt GraphRAGBedrockAgent.AgentId
+      AgentVersion: DRAFT
+      ActionGroupName: GraphRAGActionGroup
+      Description: Hybrid retrieval and Neo4j graph traversal tools
+      ActionGroupExecutor:
+        Lambda: !GetAtt GraphRAGActionGroupLambda.Arn
+      FunctionSchema:
+        Functions:
+          - Name: retrieve_and_rerank
+            Description: Runs hybrid vector search, Neo4j multi-hop ontology traversal, and reranking
+            Parameters:
+              query:
+                Type: string
+                Description: The search query to retrieve evidence for
+                Required: true
+              top_k:
+                Type: integer
+                Description: Top k chunks to retrieve
+                Required: false
+          - Name: hybrid_search
+            Description: Runs dense pgvector and sparse BM25 search
+            Parameters:
+              query:
+                Type: string
+                Description: Search query
+                Required: true
+              top_k:
+                Type: integer
+                Description: Top candidates
+                Required: false
+          - Name: neo4j_traverse
+            Description: Executes Neo4j ontology multi-hop traversal
+            Parameters:
+              query:
+                Type: string
+                Description: Search terms or entities
+                Required: true
+              limit:
+                Type: integer
+                Description: Maximum graph edges/chunks to retrieve
+                Required: false
+
+  # -------------------------------------------------------------
+  # Bedrock Agent Alias
+  # -------------------------------------------------------------
+  GraphRAGAgentAlias:
+    Type: AWS::Bedrock::AgentAlias
+    DependsOn: GraphRAGActionGroup
+    Properties:
+      AgentId: !GetAtt GraphRAGBedrockAgent.AgentId
+      AgentAliasName: production
+      Description: Production alias for GraphRAG Agent
+
+Outputs:
+  BedrockAgentId:
+    Description: Bedrock Agent ID
+    Value: !GetAtt GraphRAGBedrockAgent.AgentId
+    Export:
+      Name: !Sub '${AWS::StackName}-AgentId'
+
+  BedrockAgentAliasId:
+    Description: Production Bedrock Agent Alias ID
+    Value: !GetAtt GraphRAGAgentAlias.AgentAliasId
+    Export:
+      Name: !Sub '${AWS::StackName}-AgentAliasId'
+
+  ActionGroupLambdaArn:
+    Description: ARN of Action Group Lambda function
+    Value: !GetAtt GraphRAGActionGroupLambda.Arn
+

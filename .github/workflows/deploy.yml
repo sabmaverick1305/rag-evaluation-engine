@@ -120,7 +120,32 @@ jobs:
           echo "$IMAGE_URI:$IMAGE_TAG"
 
       # ------------------------------------
-      # 8. ECS deployment (optional)
+      # 8. Deploy / Sync AWS Bedrock Agent Core & Action Group
+      # ------------------------------------
+      - name: Set up Python for Bedrock Agent Deployment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Deployment Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install boto3
+
+      - name: Deploy AWS Bedrock Agent Core
+        env:
+          AWS_REGION: ${{ env.AWS_REGION }}
+          BEDROCK_MODEL_ID: "anthropic.claude-3-5-sonnet-20241022-v2:0"
+        run: |
+          echo "Deploying / updating AWS Bedrock Agent and Action Group Lambda..."
+          python scripts/deploy_bedrock_agent.py \
+            --region "$AWS_REGION" \
+            --model-id "$BEDROCK_MODEL_ID" \
+            --agent-name "rag-graph-research-agent" \
+            --alias-name "production"
+
+      # ------------------------------------
+      # 9. ECS deployment (optional)
       # ------------------------------------
       # Enable after configuring your
       # ECS cluster, service and task definition.

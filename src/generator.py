@@ -1,34 +1,54 @@
-import os
 import json
-from pydantic import ValidationError
-from typing import List, Dict, Any
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+import os
+import sys
+from typing import Any
+
 from langchain_huggingface import HuggingFacePipeline
-from src.schemas import Citation, GroundedRAGResponse
+from peft import PeftModel
+from pydantic import ValidationError
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+
+from src.schemas import GroundedRAGResponse
+
 
 class ProductionGenerator:
-    def __init__(self, model_id: str = "Qwen/Qwen2.5-1.5B-Instruct"):
+    def __init__(self, model_id: str = "Qwen/Qwen2.5-1.5B-Instruct", adapter_path: str | None = "./qwen-graphrag-adapter-final", *, do_sample: bool = True, max_new_tokens: int = 512):
+        if sys.platform == "darwin":
+            # Concurrent safetensors loading can deadlock with this local stack.
+            os.environ.setdefault("HF_DEACTIVATE_ASYNC_LOAD", "1")
         print(f"Loading local generator model ({model_id})...")
+        print("Loading base model and fine-tuned LoRA adapter..." if adapter_path else "Loading base model...")
         self.tokenizer = AutoTokenizer.from_pretrained(model_id)
-        self.model = AutoModelForCausalLM.from_pretrained(
+        print("Tokenizer loaded; loading base model weights...")
+
+        base_model = AutoModelForCausalLM.from_pretrained(
             model_id,
             device_map="auto",
             torch_dtype="auto"
         )
-        
+
+        self.model = PeftModel.from_pretrained(base_model, adapter_path) if adapter_path else base_model
+        self.model.eval()
+        print("LoRA adapter loaded." if adapter_path else "Base model loaded without an adapter.")
+
         pipe = pipeline(
             "text-generation",
             model=self.model,
             tokenizer=self.tokenizer,
-            max_new_tokens=512,
-            temperature=0.1,
-            do_sample=True
+            max_new_tokens=max_new_tokens,
+            do_sample=do_sample,
+            return_full_text=False,
+            **({"temperature": 0.1} if do_sample else {}),
         )
         self.llm = HuggingFacePipeline(pipeline=pipe)
 
-    def generate_grounded_answer(self, query: str, retrieved_chunks: List[Dict[str, Any]]) -> GroundedRAGResponse:
+    def generate_grounded_answer(self, query: str, retrieved_chunks: list[dict[str, Any]], *, diagnostics: dict | None = None) -> GroundedRAGResponse:
+        if diagnostics is not None:
+            diagnostics.update(raw_output=None, schema_valid=False, generation_skipped=False, validation_failure=None)
         # Fallback check if no relevant chunks are present
         if not retrieved_chunks or retrieved_chunks[0].get("score", 1.0) < -2.0:
+            if diagnostics is not None:
+                diagnostics["generation_skipped"] = True
             return GroundedRAGResponse(
                 answer="I cannot answer this based on the provided documents as no sufficiently relevant context was found.",
                 citations=[],
@@ -36,7 +56,7 @@ class ProductionGenerator:
             )
 
         context_str = "\n\n".join([
-            f"--- CHUNK ID: {chunk['id']} (Source: {chunk.get('source_doc', 'doc')}) ---\n{chunk['text']}" 
+            f"--- CHUNK ID: {chunk['id']} (Source: {chunk.get('source_doc', 'doc')}) ---\n{chunk['text']}"
             for chunk in retrieved_chunks
         ])
 
@@ -55,8 +75,12 @@ class ProductionGenerator:
         user_prompt = f"Context:\n{context_str}\n\nUser Question: {query}"
 
         # Invoke local LLM with structured instruction
-        response_raw = self.llm.invoke(f"{system_prompt}\n\n{user_prompt}")
-        
+        messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
+        prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        response_raw = self.llm.invoke(prompt)
+        if diagnostics is not None:
+            diagnostics["raw_output"] = response_raw
+
         # Clean and parse JSON output into Pydantic model
         try:
             # Extract JSON block if wrapped in markdown
@@ -68,17 +92,17 @@ class ProductionGenerator:
                 json_str = response_raw.strip()
 
             data = json.loads(json_str)
-            return GroundedRAGResponse(**data)
+            response = GroundedRAGResponse(**data)
+            if diagnostics is not None:
+                diagnostics["schema_valid"] = True
+            return response
         except (json.JSONDecodeError, ValidationError) as e:
+            if diagnostics is not None:
+                diagnostics["validation_failure"] = {"type": type(e).__name__, "message": str(e)}
             # Fallback parser safety net if formatting fails
             return GroundedRAGResponse(
                 answer=response_raw.strip(),
-                citations=[
-                    Citation(
-                        chunk_id=retrieved_chunks[0]["id"],
-                        source_doc=retrieved_chunks[0].get("source_doc", "unknown"),
-                        relevant_snippet=retrieved_chunks[0]["text"][:150]
-                    )
-                ],
-                confidence_score=0.5
+                # Parsing failure is not evidence of grounding: never invent a citation.
+                citations=[],
+                confidence_score=0.0
             )

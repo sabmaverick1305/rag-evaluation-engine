@@ -40,9 +40,23 @@ jobs:
       run: |
         uv pip install --system -r pyproject.toml || uv pip install --system .
 
+    - name: Ingest Document Corpus
+      env:
+        DATABASE_URL: postgresql://graphrag:localdevonly@localhost:5432/graphrag
+      run: |
+        python src/ingest_pdf.py
+
     - name: Run Retrieval Evaluation Tests
       env:
         DATABASE_URL: postgresql://graphrag:localdevonly@localhost:5432/graphrag
-        RETRIEVAL_TOP_K: 1
+        RETRIEVAL_TOP_K: 3
       run: |
         uv run pytest evaluation/evaluate_retrieval.py -v -s
+
+    - name: Run Hermetic Unit Test Suite
+      run: |
+        uv run pytest tests/test_agent_workflow.py tests/test_bedrock_integration.py tests/test_agentcore_integration.py -v
+
+    - name: Run Hermetic Unit Test Suite
+      run: |
+        uv run pytest tests/test_agent_workflow.py tests/test_bedrock_integration.py tests/test_agentcore_integration.py -v

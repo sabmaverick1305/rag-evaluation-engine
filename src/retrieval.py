@@ -1,32 +1,34 @@
-import os
 from contextlib import closing
-from typing import List, Dict, Any
+from typing import Any
+
 import psycopg2
-from sentence_transformers import SentenceTransformer, CrossEncoder
-from src.state import RAGState
+from sentence_transformers import CrossEncoder, SentenceTransformer
+
 from src.neo4j_client import Neo4jGraphClient
+from src.state import RAGState
+
 
 class ProductionGraphRAGRetriever:
     def __init__(
-        self, 
-        db_url: str, 
+        self,
+        db_url: str,
         embedding_model_id: str = "sentence-transformers/all-MiniLM-L6-v2",
         cross_encoder_id: str = "BAAI/bge-reranker-large"
     ):
         self.db_url = db_url
         print(f"Initializing embedding model ({embedding_model_id})...")
         self.embedder = SentenceTransformer(embedding_model_id)
-        
+
         print(f"Initializing cross-encoder reranker ({cross_encoder_id})...")
         self.reranker = CrossEncoder(cross_encoder_id)
-        
+
         # Initialize Neo4j graph client for ontology-aware traversal
         self.neo4j_client = Neo4jGraphClient()
-        
+
         # Load local reference chunks for evaluation alignment
         self.chunks = self._load_all_chunks()
 
-    def _load_all_chunks(self) -> Dict[str, Dict[str, Any]]:
+    def _load_all_chunks(self) -> dict[str, dict[str, Any]]:
         """Loads all document chunks from Postgres into memory for validation."""
         chunks_map = {}
         try:
@@ -44,7 +46,7 @@ class ProductionGraphRAGRetriever:
             print(f"Warning: Could not load chunks cache from DB: {e}")
         return chunks_map
 
-    def _run_hybrid_search(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    def _run_hybrid_search(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
         """Executes combined dense vector search and sparse text search in PostgreSQL."""
         query_vector = self.embedder.encode(query).tolist()
         candidates = {}
@@ -54,7 +56,7 @@ class ProductionGraphRAGRetriever:
                 # 1. Dense Vector Search (pgvector cosine similarity)
                 cursor.execute(
                     """
-                    SELECT chunk_id, content, source_doc, 
+                    SELECT chunk_id, content, source_doc,
                            1 - (embedding <=> %s::vector) AS score
                     FROM document_chunks
                     ORDER BY embedding <=> %s::vector
@@ -95,7 +97,7 @@ class ProductionGraphRAGRetriever:
 
         return list(candidates.values())
 
-    def _rerank_candidates(self, query: str, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _rerank_candidates(self, query: str, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Re-scores and sorts candidate chunks using the Cross-Encoder model."""
         if not candidates:
             return []
@@ -121,8 +123,9 @@ class ProductionGraphRAGRetriever:
         """
         query = state.query
 
-        # Step 1: Hybrid Search from Postgres
-        hybrid_candidates = self._run_hybrid_search(query, top_k=5)
+        # Step 1: Hybrid Search from Postgres (fetch a wider candidate pool for cross-encoder reranking)
+        candidate_pool_size = max(15, top_k * 5)
+        hybrid_candidates = self._run_hybrid_search(query, top_k=candidate_pool_size)
 
         # Step 2: Neo4j Ontology-Driven Graph Traversal
         kg_candidates = self.neo4j_client.ontology_multihop_traverse(query, limit=3)

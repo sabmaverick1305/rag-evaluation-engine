@@ -1,0 +1,151 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "GraphRAG Action Group API",
+    "description": "Tools for AWS Bedrock Agent Core to execute hybrid retrieval, Neo4j knowledge graph traversal, and reranking over technical documentation.",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/retrieve_and_rerank": {
+      "post": {
+        "summary": "Retrieve and rerank context chunks using pgvector, BM25, and Neo4j KG",
+        "description": "Performs hybrid retrieval (dense pgvector + BM25 keyword matching), queries Neo4j ontology graph for multi-hop entity relationships, merges context, and scores chunks with a Cross-Encoder reranker.",
+        "operationId": "retrieve_and_rerank",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "type": "string",
+                    "description": "The technical search query or question to retrieve evidence for."
+                  },
+                  "top_k": {
+                    "type": "integer",
+                    "description": "Number of top reranked chunks to return.",
+                    "default": 3
+                  }
+                },
+                "required": ["query"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful retrieval and reranking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "query": { "type": "string" },
+                        "retrieved_candidates": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": { "type": "string" },
+                              "text": { "type": "string" },
+                              "source_doc": { "type": "string" },
+                              "score": { "type": "number" },
+                              "kg_context": { "type": "string" }
+                            }
+                          }
+                        },
+                        "count": { "type": "integer" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/hybrid_search": {
+      "post": {
+        "summary": "Dense vector and sparse BM25 search",
+        "description": "Executes dense pgvector cosine similarity search and sparse Postgres keyword search.",
+        "operationId": "hybrid_search",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "query": { "type": "string", "description": "The search query." },
+                  "top_k": { "type": "integer", "description": "Number of candidates.", "default": 5 }
+                },
+                "required": ["query"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "List of candidate chunks.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "data": { "type": "array", "items": { "type": "object" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/neo4j_traverse": {
+      "post": {
+        "summary": "Neo4j Knowledge Graph Multi-Hop Traversal",
+        "description": "Traverses ontology entity relationships in Neo4j to find linked document chunks and concept connections.",
+        "operationId": "neo4j_traverse",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "query": { "type": "string", "description": "Query or entity keywords." },
+                  "limit": { "type": "integer", "description": "Maximum number of graph chunks.", "default": 3 }
+                },
+                "required": ["query"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Knowledge graph augmented chunks.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string" },
+                    "data": { "type": "array", "items": { "type": "object" } }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+

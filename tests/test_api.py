@@ -3,7 +3,11 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
-import dotenv
+
+try:
+    import dotenv
+except ImportError:
+    dotenv = None
 from fastapi.testclient import TestClient
 from langsmith import Client, get_current_run_tree, tracing_context
 from langsmith import utils as langsmith_utils
@@ -16,7 +20,8 @@ from src.state import RAGState
 @pytest.fixture
 def api_client(monkeypatch):
     # Keep unit tests independent of local credentials and external trace uploads.
-    monkeypatch.setattr(dotenv, "load_dotenv", Mock(return_value=False))
+    if dotenv is not None:
+        monkeypatch.setattr(dotenv, "load_dotenv", Mock(return_value=False))
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
     monkeypatch.setenv("LANGSMITH_TRACING_V2", "false")
     langsmith_utils.get_env_var.cache_clear()
