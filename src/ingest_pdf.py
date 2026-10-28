@@ -46,7 +46,38 @@ class ProductionPDFIngestion:
             })
         return triplets
 
+    def ensure_schema(self):
+        """Ensures pgvector extension and tables exist before ingestion."""
+        with psycopg2.connect(self.db_url) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("CREATE EXTENSION IF NOT EXISTS vector;")
+                cursor.execute("""
+                CREATE TABLE IF NOT EXISTS document_chunks (
+                    id SERIAL PRIMARY KEY,
+                    chunk_id VARCHAR(255) UNIQUE NOT NULL,
+                    source_doc VARCHAR(255) NOT NULL,
+                    content TEXT NOT NULL,
+                    embedding VECTOR(384)
+                );
+                CREATE INDEX IF NOT EXISTS chunks_embedding_hnsw_idx
+                ON document_chunks USING hnsw (embedding vector_cosine_ops);
+                CREATE TABLE IF NOT EXISTS kg_nodes (
+                    id SERIAL PRIMARY KEY,
+                    entity_name VARCHAR(255) UNIQUE NOT NULL,
+                    entity_type VARCHAR(100)
+                );
+                CREATE TABLE IF NOT EXISTS kg_edges (
+                    id SERIAL PRIMARY KEY,
+                    source_entity VARCHAR(255) NOT NULL,
+                    target_entity VARCHAR(255) NOT NULL,
+                    relation_type VARCHAR(100) NOT NULL,
+                    chunk_id VARCHAR(255) REFERENCES document_chunks(chunk_id) ON DELETE CASCADE
+                );
+                """)
+            conn.commit()
+
     def process_and_store(self, pdf_path: str, doc_name: str):
+        self.ensure_schema()
         print(f"Parsing PDF: {pdf_path}...")
         raw_text = self.parse_pdf(pdf_path)
 

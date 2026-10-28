@@ -40,6 +40,12 @@ jobs:
       run: |
         uv pip install --system -r pyproject.toml || uv pip install --system .
 
+    - name: Ingest Document Corpus
+      env:
+        DATABASE_URL: postgresql://graphrag:localdevonly@localhost:5432/graphrag
+      run: |
+        python src/ingest_pdf.py
+
     - name: Run Retrieval Evaluation Tests
       env:
         DATABASE_URL: postgresql://graphrag:localdevonly@localhost:5432/graphrag
