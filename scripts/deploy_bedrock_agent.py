@@ -148,6 +148,11 @@ def deploy_lambda_function(
             FunctionName=function_name,
             ZipFile=zip_bytes,
         )
+        try:
+            waiter = lambda_client.get_waiter("function_updated_v2")
+            waiter.wait(FunctionName=function_name)
+        except Exception:
+            time.sleep(5)
         lambda_client.update_function_configuration(
             FunctionName=function_name,
             Environment={"Variables": environment_vars},
@@ -157,20 +162,26 @@ def deploy_lambda_function(
         return func_arn
     except lambda_client.exceptions.ResourceNotFoundException:
         logger.info(f"Creating Lambda function: {function_name}...")
-        # Brief pause for IAM role propagation
-        time.sleep(5)
-        response = lambda_client.create_function(
-            FunctionName=function_name,
-            Runtime="python3.11",
-            Role=role_arn,
-            Handler="src.aws.lambda_action_group.lambda_handler",
-            Code={"ZipFile": zip_bytes},
-            Description="GraphRAG Action Group tool handler for AWS Bedrock Agent",
-            Timeout=60,
-            MemorySize=512,
-            Environment={"Variables": environment_vars},
-        )
-        return response["FunctionArn"]
+        for attempt in range(6):
+            try:
+                response = lambda_client.create_function(
+                    FunctionName=function_name,
+                    Runtime="python3.11",
+                    Role=role_arn,
+                    Handler="src.aws.lambda_action_group.lambda_handler",
+                    Code={"ZipFile": zip_bytes},
+                    Description="GraphRAG Action Group tool handler for AWS Bedrock Agent",
+                    Timeout=60,
+                    MemorySize=512,
+                    Environment={"Variables": environment_vars},
+                )
+                return response["FunctionArn"]
+            except lambda_client.exceptions.InvalidParameterValueException as e:
+                if attempt < 5 and "cannot be assumed" in str(e):
+                    logger.info("Waiting for IAM role to propagate to Lambda (5s)...")
+                    time.sleep(5)
+                else:
+                    raise
 
 
 def grant_bedrock_permission_to_lambda(
@@ -221,14 +232,25 @@ def deploy_or_update_bedrock_agent(
         )
     else:
         logger.info(f"Creating new Bedrock Agent: {agent_name}...")
-        response = bedrock_agent_client.create_agent(
-            agentName=agent_name,
-            agentResourceRoleArn=agent_role_arn,
-            foundationModel=model_id,
-            instruction=instruction,
-            description="Production GraphRAG Deep Research Agent powered by AWS Bedrock Agent Core",
-        )
-        agent_id = response["agent"]["agentId"]
+        for attempt in range(6):
+            try:
+                response = bedrock_agent_client.create_agent(
+                    agentName=agent_name,
+                    agentResourceRoleArn=agent_role_arn,
+                    foundationModel=model_id,
+                    instruction=instruction,
+                    description="Production GraphRAG Deep Research Agent powered by AWS Bedrock Agent Core",
+                )
+                agent_id = response["agent"]["agentId"]
+                break
+            except Exception as e:
+                if "Maintenance Mode" in str(e):
+                    raise
+                if attempt < 5 and ("role" in str(e).lower() or "assume" in str(e).lower() or "cannot be assumed" in str(e).lower()):
+                    logger.info("Waiting for Bedrock Agent IAM role to propagate (5s)...")
+                    time.sleep(5)
+                else:
+                    raise
 
     logger.info(f"Bedrock Agent ready with ID: {agent_id}")
     return agent_id
@@ -427,13 +449,35 @@ def main():
     )
 
     # 4. Deploy Bedrock Agent
-    agent_id = deploy_or_update_bedrock_agent(
-        bedrock_agent_client=bedrock_agent_client,
-        agent_name=args.agent_name,
-        agent_role_arn=bedrock_role_arn,
-        model_id=args.model_id,
-        instruction=agent_instruction,
-    )
+    try:
+        agent_id = deploy_or_update_bedrock_agent(
+            bedrock_agent_client=bedrock_agent_client,
+            agent_name=args.agent_name,
+            agent_role_arn=bedrock_role_arn,
+            model_id=args.model_id,
+            instruction=agent_instruction,
+        )
+    except Exception as e:
+        if "Maintenance Mode" in str(e):
+            banner = (
+                "\n"
+                + "=" * 70
+                + "\n[AWS BEDROCK NOTICE]: Bedrock Classic Agents is in Maintenance Mode.\n"
+                "AWS has closed new agent creation for accounts without prior classic usage.\n\n"
+                "AWS designated production path is Amazon Bedrock AgentCore with LangGraph,\n"
+                "or running autonomous agents on AWS ECS / App Runner / Lambda Web Adapter\n"
+                "invoking AWS Bedrock Foundation Models via the Bedrock Converse API.\n\n"
+                f"Infrastructure Deployed Successfully:\n"
+                f"  - Action Group Lambda: {lambda_arn}\n"
+                f"  - Bedrock Agent IAM Role: {bedrock_role_arn}\n"
+                f"  - Lambda Execution Role: {lambda_role_arn}\n"
+                f"  - OpenAPI Action Schema: {openapi_path}\n"
+                + "=" * 70
+                + "\n"
+            )
+            logger.warning(banner)
+            return
+        raise
 
     # 5. Grant invoke permission
     grant_bedrock_permission_to_lambda(
