@@ -60,7 +60,15 @@ def main():
             success = False
 
     # 3. Hermetic Unit Test Suite
-    test_cmd = [sys.executable, "-m", "pytest", "tests/test_agent_workflow.py", "tests/test_bedrock_integration.py", "-v"]
+    test_cmd = [
+        sys.executable,
+        "-m",
+        "pytest",
+        "tests/test_agent_workflow.py",
+        "tests/test_bedrock_integration.py",
+        "tests/test_agentcore_integration.py",
+        "-v",
+    ]
     if not run_step("Unit Test Suite", test_cmd):
         success = False
 

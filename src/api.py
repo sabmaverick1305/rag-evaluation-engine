@@ -52,6 +52,10 @@ class BedrockAgentQueryRequest(BaseModel):
     session_id: str | None = None
     enable_trace: bool = True
 
+class AgentCoreQueryRequest(BaseModel):
+    prompt: str
+    session_id: str | None = None
+
 class QueryResponse(BaseModel):
     query: str
     answer: str
@@ -123,6 +127,18 @@ async def bedrock_agent_query_endpoint(request: BedrockAgentQueryRequest):
             enable_trace=request.enable_trace,
         )
         return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/agentcore/research", response_model=GroundedRAGResponse)
+async def agentcore_research_endpoint(request: AgentCoreQueryRequest):
+    """Executes research through the Amazon Bedrock AgentCore runtime entrypoint."""
+    try:
+        from src.aws.agentcore_app import agentcore_entrypoint
+        response = agentcore_entrypoint(
+            payload={"prompt": request.prompt, "session_id": request.session_id}
+        )
+        return GroundedRAGResponse.model_validate(response["result"])
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
