@@ -123,8 +123,9 @@ class ProductionGraphRAGRetriever:
         """
         query = state.query
 
-        # Step 1: Hybrid Search from Postgres
-        hybrid_candidates = self._run_hybrid_search(query, top_k=5)
+        # Step 1: Hybrid Search from Postgres (fetch a wider candidate pool for cross-encoder reranking)
+        candidate_pool_size = max(15, top_k * 5)
+        hybrid_candidates = self._run_hybrid_search(query, top_k=candidate_pool_size)
 
         # Step 2: Neo4j Ontology-Driven Graph Traversal
         kg_candidates = self.neo4j_client.ontology_multihop_traverse(query, limit=3)

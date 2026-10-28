@@ -49,6 +49,6 @@ jobs:
     - name: Run Retrieval Evaluation Tests
       env:
         DATABASE_URL: postgresql://graphrag:localdevonly@localhost:5432/graphrag
-        RETRIEVAL_TOP_K: 1
+        RETRIEVAL_TOP_K: 3
       run: |
         uv run pytest evaluation/evaluate_retrieval.py -v -s
