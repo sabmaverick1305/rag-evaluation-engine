@@ -1,5 +1,6 @@
-from typing import List
+
 from pydantic import BaseModel, Field
+
 
 class Citation(BaseModel):
     chunk_id: str = Field(description="The exact chunk ID used as evidence (e.g., ai_engineering_ch1_chunk_333).")
@@ -8,5 +9,5 @@ class Citation(BaseModel):
 
 class GroundedRAGResponse(BaseModel):
     answer: str = Field(description="The precise technical answer grounded exclusively in the provided context.")
-    citations: List[Citation] = Field(description="List of exact chunk citations supporting the claims made in the answer.")
-    confidence_score: float = Field(description="Confidence score between 0.0 and 1.0 regarding factual grounding.")
+    citations: list[Citation] = Field(description="List of exact chunk citations supporting the claims made in the answer.")
+    confidence_score: float = Field(ge=0.0, le=1.0, description="Self-reported confidence between 0.0 and 1.0; not a correctness measurement.")

@@ -1,0 +1,7 @@
+{
+  "messages": [
+    {"role": "system", "content": "You are a precise technical AI assistant. Answer using ONLY the provided context and output valid JSON."},
+    {"role": "user", "content": "Context:\nmodel. A transformer architecture is composed of multiple transformer blocks...\n\nQuestion: Explain the core technical concepts..."},
+    {"role": "assistant", "content": "{\"answer\": \"Based on the documentation, model. A transformer architecture is composed...\", \"citations\": [{\"chunk_id\": \"ai_engineering_ch1_chunk_333\", \"source_doc\": \"ai_engineering_ch1\", \"relevant_snippet\": \"model. A transformer architecture...\"}], \"confidence_score\": 0.95}"}
+  ]
+}

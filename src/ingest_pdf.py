@@ -1,9 +1,10 @@
 import os
-from typing import List, Dict, Any
+
 import psycopg2
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 
 class ProductionPDFIngestion:
     def __init__(self, db_url: str, chunk_size: int = 500, chunk_overlap: int = 50):
@@ -26,7 +27,7 @@ class ProductionPDFIngestion:
         # Clean before splitting so embeddings and stored content use the same text.
         return full_text.replace("\x00", "")
 
-    def extract_graph_triplets(self, chunk_text: str, chunk_id: str) -> List[Dict[str, str]]:
+    def extract_graph_triplets(self, chunk_text: str, chunk_id: str) -> list[dict[str, str]]:
         """
         Production-grade rule/heuristic or lightweight extraction of entities & relations.
         (In production, you can replace this with an LLM structured extraction call).
@@ -35,7 +36,7 @@ class ProductionPDFIngestion:
         # Simple heuristic example for demonstration: looking for key terms
         keywords = ["AI engineering", "foundation models", "RAG", "fine-tuning", "prompt engineering", "evaluation"]
         found = [kw for kw in keywords if kw.lower() in chunk_text.lower()]
-        
+
         for i in range(len(found) - 1):
             triplets.append({
                 "source": found[i],
@@ -48,7 +49,7 @@ class ProductionPDFIngestion:
     def process_and_store(self, pdf_path: str, doc_name: str):
         print(f"Parsing PDF: {pdf_path}...")
         raw_text = self.parse_pdf(pdf_path)
-        
+
         splits = self.splitter.split_text(raw_text)
         print(f"Split document into {len(splits)} chunks. Generating embeddings & storing in Postgres...")
 
@@ -64,7 +65,7 @@ class ProductionPDFIngestion:
                 """
                 INSERT INTO document_chunks (chunk_id, source_doc, content, embedding)
                 VALUES (%s, %s, %s, %s)
-                ON CONFLICT (chunk_id) DO UPDATE 
+                ON CONFLICT (chunk_id) DO UPDATE
                 SET content = EXCLUDED.content, embedding = EXCLUDED.embedding;
                 """,
                 (chunk_id, doc_name, text, embedding)
@@ -76,7 +77,7 @@ class ProductionPDFIngestion:
                 # Insert nodes if not exist
                 cursor.execute("INSERT INTO kg_nodes (entity_name) VALUES (%s) ON CONFLICT DO NOTHING;", (t["source"],))
                 cursor.execute("INSERT INTO kg_nodes (entity_name) VALUES (%s) ON CONFLICT DO NOTHING;", (t["target"],))
-                
+
                 # Insert edge
                 cursor.execute(
                     """
@@ -94,7 +95,7 @@ class ProductionPDFIngestion:
 if __name__ == "__main__":
     DB_URL = os.getenv("DATABASE_URL", "postgresql://graphrag:localdevonly@127.0.0.1:5432/graphrag")
     pipeline = ProductionPDFIngestion(db_url=DB_URL)
-    
+
     # Target your local PDF book chapter or sample file
     pdf_file = "data/ai_engineering_by_chip_huyen.pdf"
     if os.path.exists(pdf_file):

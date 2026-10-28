@@ -1,8 +1,10 @@
 import os
-from typing import Dict, List, Any
+from typing import Any
+
 import psycopg2
-from sentence_transformers import SentenceTransformer
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from sentence_transformers import SentenceTransformer
+
 
 class PostgresIngestionPipeline:
     def __init__(self, db_url: str, chunk_size: int = 500, chunk_overlap: int = 50):
@@ -15,7 +17,7 @@ class PostgresIngestionPipeline:
         # Using a compact, high-efficiency local embedding model
         self.encoder = SentenceTransformer("all-MiniLM-L6-v2")
 
-    def ingest_documents(self, raw_documents: List[Dict[str, Any]]):
+    def ingest_documents(self, raw_documents: list[dict[str, Any]]):
         conn = psycopg2.connect(self.db_url)
         cursor = conn.cursor()
 
@@ -30,13 +32,13 @@ class PostgresIngestionPipeline:
                     """
                     INSERT INTO document_chunks (chunk_id, parent_doc_id, content, embedding)
                     VALUES (%s, %s, %s, %s)
-                    ON CONFLICT (chunk_id) DO UPDATE 
+                    ON CONFLICT (chunk_id) DO UPDATE
                     SET content = EXCLUDED.content, embedding = EXCLUDED.embedding;
                     """,
                     (chunk_id, doc["id"], text, embedding)
                 )
                 total_inserted += 1
-        
+
         conn.commit()
         cursor.close()
         conn.close()
@@ -45,7 +47,7 @@ class PostgresIngestionPipeline:
 if __name__ == "__main__":
     # Example usage targeting your local docker-compose Postgres instance
     DB_URL = os.getenv("DATABASE_URL", "postgresql://graphrag:localdevonly@127.0.0.1:5432/graphrag")
-    
+
     sample_docs = [
         {
             "id": "doc_networking_01",
@@ -56,8 +58,8 @@ if __name__ == "__main__":
             "text": "Graph RAG enhances traditional vector search by building hierarchical community summaries and traversing entity relationships. This bridges context gaps when multi-hop reasoning spans across disparate document sections."
         }
     ]
-    
+
     pipeline = PostgresIngestionPipeline(db_url=DB_URL)
     pipeline.ingest_documents(sample_docs)
 
-        
+

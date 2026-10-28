@@ -14,6 +14,8 @@ def load_golden_dataset():
 
 def validate_golden_dataset(test_cases, chunks):
     """Reject stale labels before interpreting a failure as poor retrieval."""
+    if isinstance(chunks, dict):
+        chunks = chunks.values()
     corpus = {chunk["id"]: chunk["text"] for chunk in chunks}
     for case in test_cases:
         query_id = case["query_id"]
@@ -111,11 +113,16 @@ def is_acceptable_match(retrieved_id: str, target_ids: set, window: int = 1) -> 
     
     # Parse chunk index (e.g., 'ai_engineering_ch1_chunk_1206' -> 1206)
     try:
-        retrieved_idx = int(retrieved_id.split("_")[-1])
-        for tid in target_ids:
-            target_idx = int(tid.split("_")[-1])
-            if abs(retrieved_idx - target_idx) <= window:
-                return True
+        retrieved_prefix, retrieved_suffix = retrieved_id.rsplit("_", 1)
+        retrieved_idx = int(retrieved_suffix)
     except ValueError:
-        pass
+        return False
+    for tid in target_ids:
+        try:
+            target_prefix, target_suffix = tid.rsplit("_", 1)
+            target_idx = int(target_suffix)
+        except ValueError:
+            continue
+        if retrieved_prefix == target_prefix and abs(retrieved_idx - target_idx) <= window:
+            return True
     return False

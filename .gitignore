@@ -13,3 +13,9 @@ wheels/
 .env
 .env.*
 !.env.example
+
+# Generated evaluation reports (include model outputs and document excerpts)
+evaluation/results/
+
+# Large model checkpoints
+qwen-graphrag-adapter/
