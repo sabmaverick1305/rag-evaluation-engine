@@ -52,3 +52,7 @@ jobs:
         RETRIEVAL_TOP_K: 3
       run: |
         uv run pytest evaluation/evaluate_retrieval.py -v -s
+
+    - name: Run Hermetic Unit Test Suite
+      run: |
+        python -m pytest tests/test_agent_workflow.py tests/test_bedrock_integration.py tests/test_agentcore_integration.py -v
